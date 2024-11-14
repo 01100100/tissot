@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>Sync movement of multiple maps</title>
+    <meta property="og:description" content="Synchronize MapLibre GL JS maps with the sync-move plugin." />
+    <meta charset='utf-8'>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel='stylesheet' href='https://unpkg.com/maplibre-gl@5.0.0-pre.1/dist/maplibre-gl.css' />
+    <script src='https://unpkg.com/maplibre-gl@5.0.0-pre.1/dist/maplibre-gl.js'></script>
+    <script src="https://unpkg.com/@mapbox/mapbox-gl-sync-move@0.3.1"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        html,
+        body {
+            height: 100%;
+        }
+
+        #map1,
+        #map2,
+        #map3 {
+            height: 100%;
+            width: 100%;
+        }
+
+        .maps {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="maps" style="background-color: skyblue;">
+        <div id="map1"></div>
+        <div id="map2"></div>
+    </div>
+    <script>
+        let lockedMap = 'none';
+
+        class LockControl {
+            constructor(otherMap) {
+                this.otherMap = otherMap;
+            }
+
+            onAdd(map) {
+                this._map = map;
+                this._container = document.createElement("div");
+                this._container.className = "maplibregl-ctrl maplibregl-ctrl-group";
+                const button = document.createElement("button");
+                button.type = "button";
+                button.title = "Lock";
+                button.style.borderRadius = "4px";
+                button.style.padding = "8px";
+                button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M144 144l0 48 160 0 0-48c0-44.2-35.8-80-80-80s-80 35.8-80 80zM80 192l0-48C80 64.5 144.5 0 224 0s144 64.5 144 144l0 48 16 0c35.3 0 64 28.7 64 64l0 192c0 35.3-28.7 64-64 64L64 512c-35.3 0-64-28.7-64-64L0 256c0-35.3 28.7-64 64-64l16 0z"/></svg>`;
+                button.addEventListener('click', () => {
+                    const mapContainer = this._map.getContainer();
+                    if (lockedMap === 'none') {
+                        this.lock(button, mapContainer.id);
+                    } else if (lockedMap === mapContainer.id) {
+                        this.unlock(button);
+                    } else {
+                        const previousButton = document.querySelector(`#${lockedMap} button`);
+                        if (previousButton) {
+                            this.unlock(previousButton);
+                        }
+                        this.lock(button, mapContainer.id);
+                    }
+                });
+                this._container.appendChild(button);
+                return this._container;
+            }
+
+            lock(button, mapId) {
+                lockedMap = mapId;
+                const bounds = this._map.getBounds();
+                const coordinates = [
+                    [bounds.getSouthWest().lng, bounds.getSouthWest().lat],
+                    [bounds.getNorthWest().lng, bounds.getNorthWest().lat],
+                    [bounds.getNorthEast().lng, bounds.getNorthEast().lat],
+                    [bounds.getSouthEast().lng, bounds.getSouthEast().lat],
+                    [bounds.getSouthWest().lng, bounds.getSouthWest().lat]
+                ];
+                this.otherMap.addSource('viewport-polygon', {
+                    'type': 'geojson',
+                    'data': {
+                        'type': 'Feature',
+                        'geometry': {
+                            'type': 'Polygon',
+                            'coordinates': [coordinates]
+                        }
+                    }
+                });
+                this.otherMap.addLayer({
+                    'id': 'viewport-polygon',
+                    'type': 'fill',
+                    'source': 'viewport-polygon',
+                    'layout': {},
+                    'paint': {
+                        'fill-color': '#F08080',
+                        'fill-opacity': 0.5
+                    }
+                });
+                button.style.backgroundColor = "lightgreen";
+            }
+
+            unlock(button) {
+                lockedMap = 'none';
+                if (this.otherMap.getLayer('viewport-polygon')) {
+                    this.otherMap.removeLayer('viewport-polygon');
+                }
+                if (this.otherMap.getSource('viewport-polygon')) {
+                    this.otherMap.removeSource('viewport-polygon');
+                }
+                button.style.backgroundColor = "";
+            }
+
+            onRemove() {
+                this._container.parentNode.removeChild(this._container);
+                this._map = undefined;
+            }
+        }
+
+        fetch('https://demotiles.maplibre.org/style.json')
+            .then(response => response.json())
+            .then(style => {
+                const gridStyle = {
+                    ...style, sources: {
+                        ...style.sources, grid: {
+                            type: 'vector', tiles: [
+                                "grid://{z}/{x}/{y}"
+                            ]
+                        },
+                    }, layers: [
+                        ...style.layers, {
+                            "id": "background-grid",
+                            "type": "line",
+                            "source": "grid",
+                            "source-layer": "lines",
+                            "paint": {
+                                "line-width": [
+                                    "case",
+                                    ["==", ["get", "width"], "wide"],
+                                    2,
+                                    1
+                                ],
+                                "line-color": "white",
+                                "line-opacity": 0.3
+                            },
+                          },
+                    ]
+                    }
+
+        
+                const globeStyle = { ...gridStyle, projection: { type: 'globe' } };
+
+                const tileBase64 = 'GvwKeAIKBWxpbmVzKIAgGgV3aWR0aCIGCgR3aWRlIggKBm5hcnJvdxIRGAISAgAAIgkJgECAQAoA5T8SDxgCEgIAACIHCQAACoBAABIQGAISAgAAIggJAIBACgDlPxIQGAISAgABIggJAOQBCoBAABIRGAISAgABIgkJ5AGAQAoA5T8SEBgCEgIAASIICQDIAwqAQAASERgCEgIAASIJCcgDgEAKAOU/EhAYAhICAAEiCAkAqgUKgEAAEhAYAhICAAEiCAkAjgcKgEAAEhEYAhICAAEiCQmqBYBACgDlPxIRGAISAgABIgkJjgeAQAoA5T8SEBgCEgIAASIICQDyCAqAQAASEBgCEgIAASIICQDWCgqAQAASEBgCEgIAASIICQC4DAqAQAASEBgCEgIAASIICQCcDgqAQAASERgCEgIAASIJCfIIgEAKAOU/EhEYAhICAAEiCQnWCoBACgDlPxIRGAISAgABIgkJuAyAQAoA5T8SERgCEgIAASIJCZwOgEAKAOU/EhAYAhICAAAiCAkAgBAKgEAAEhAYAhICAAEiCAkA5BEKgEAAEhAYAhICAAEiCAkAyBMKgEAAEhAYAhICAAEiCAkAqhUKgEAAEhAYAhICAAEiCAkAjhcKgEAAEhAYAhICAAEiCAkA8hgKgEAAEhAYAhICAAEiCAkA1hoKgEAAEhAYAhICAAEiCAkAuBwKgEAAEhAYAhICAAEiCAkAnB4KgEAAEhEYAhICAAAiCQmAEIBACgDlPxIRGAISAgABIgkJ5BGAQAoA5T8SERgCEgIAASIJCcgTgEAKAOU/EhEYAhICAAEiCQmqFYBACgDlPxIRGAISAgABIgkJjheAQAoA5T8SERgCEgIAASIJCfIYgEAKAOU/EhEYAhICAAEiCQnWGoBACgDlPxIRGAISAgABIgkJuByAQAoA5T8SERgCEgIAASIJCZwegEAKAOU/EhAYAhICAAAiCAkAgCAKgEAAEhAYAhICAAEiCAkA5CEKgEAAEhAYAhICAAEiCAkAyCMKgEAAEhAYAhICAAEiCAkAqiUKgEAAEhAYAhICAAEiCAkAjicKgEAAEhAYAhICAAEiCAkA8igKgEAAEhAYAhICAAEiCAkA1ioKgEAAEhAYAhICAAEiCAkAuCwKgEAAEhAYAhICAAEiCAkAnC4KgEAAEhAYAhICAAAiCAkAgDAKgEAAEhAYAhICAAEiCAkA5DEKgEAAEhAYAhICAAEiCAkAyDMKgEAAEhAYAhICAAEiCAkAqjUKgEAAEhAYAhICAAEiCAkAjjcKgEAAEhAYAhICAAEiCAkA8jgKgEAAEhAYAhICAAEiCAkA1joKgEAAEhAYAhICAAEiCAkAuDwKgEAAEhAYAhICAAEiCAkAnD4KgEAAEhEYAhICAAAiCQmAIIBACgDlPxIRGAISAgABIgkJ5CGAQAoA5T8SERgCEgIAASIJCcgjgEAKAOU/EhEYAhICAAEiCQmqJYBACgDlPxIRGAISAgABIgkJjieAQAoA5T8SERgCEgIAASIJCfIogEAKAOU/EhEYAhICAAEiCQnWKoBACgDlPxIRGAISAgABIgkJuCyAQAoA5T8SERgCEgIAASIJCZwugEAKAOU/EhEYAhICAAAiCQmAMIBACgDlPxIRGAISAgABIgkJ5DGAQAoA5T8SERgCEgIAASIJCcgzgEAKAOU/EhEYAhICAAEiCQmqNYBACgDlPxIRGAISAgABIgkJjjeAQAoA5T8SERgCEgIAASIJCfI4gEAKAOU/EhEYAhICAAEiCQnWOoBACgDlPxIRGAISAgABIgkJuDyAQAoA5T8SERgCEgIAASIJCZw+gEAKAOU/EhAYAhICAAAiCAkAgEAKgEAA';
+
+                maplibregl.addProtocol('grid', async (params, abortController) => {
+                    const tileArrayBuffer = Uint8Array.from(atob(tileBase64), c => c.charCodeAt(0));
+                    return { data: tileArrayBuffer };
+                });
+
+                const map1 = new maplibregl.Map({
+                    container: 'map1',
+                    style: globeStyle,
+                    center: [0, 0],
+                    zoom: 1,
+                });
+                const map2 = new maplibregl.Map({
+                    container: 'map2',
+                    style: gridStyle,
+                    center: [0, 0],
+                    zoom: 1,
+                });
+
+                // Add the custom control to each map
+                map1.addControl(new LockControl(map2), 'top-right');
+                map2.addControl(new LockControl(map1), 'top-right');
+
+                syncMaps(map1, map2);
+
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+    </script>
+</body>
+
+</html>
