@@ -14,7 +14,7 @@ xdg-open tissot/index.html
 
 ## Development
 
-This site is hosted on GitHub Pages. To run it locally, you can 
+This site is hosted on GitHub Pages.
 ```
 
 ## Resources

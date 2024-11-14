@@ -8,7 +8,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel='stylesheet' href='https://unpkg.com/maplibre-gl@5.0.0-pre.1/dist/maplibre-gl.css' />
     <script src='https://unpkg.com/maplibre-gl@5.0.0-pre.1/dist/maplibre-gl.js'></script>
-    <script src="https://unpkg.com/@mapbox/mapbox-gl-sync-move@0.3.1"></script>
 
     <style>
         body {
@@ -42,9 +41,159 @@
         <div id="map2"></div>
     </div>
     <script>
-        let lockedMap = 'none';
 
-        class LockControl {
+        let map1, map2;
+        let sourceProjection = 'none'
+        let syncDisabled = false;
+
+        function removeFootprints() {
+            console.log('Removing all footprints');
+            const maps = [map1, map2];
+            maps.forEach(map => {
+                if (map.getLayer('viewport-polygon')) {
+                    map.removeLayer('viewport-polygon');
+                }
+                if (map.getSource('viewport-polygon')) {
+                    map.removeSource('viewport-polygon');
+                }
+            });
+        }
+
+        function deselectAllButtons() {
+            const buttons = document.querySelectorAll('button');
+            buttons.forEach(button => {
+                button.style.backgroundColor = '';
+            });
+        }
+
+        function updatePolygon(source, destination) {
+            const bounds = source.getBounds();
+            const coordinates = [
+                [bounds.getSouthWest().lng, bounds.getSouthWest().lat],
+                [bounds.getNorthWest().lng, bounds.getNorthWest().lat],
+                [bounds.getNorthEast().lng, bounds.getNorthEast().lat],
+                [bounds.getSouthEast().lng, bounds.getSouthEast().lat],
+                [bounds.getSouthWest().lng, bounds.getSouthWest().lat]
+            ];
+            if (destination.getSource('viewport-polygon')) {
+                console.log(`Updating polygon on ${destination.getContainer().id}`);
+                destination.getSource('viewport-polygon').setData({
+                    'type': 'Feature',
+                    'geometry': {
+                        'type': 'Polygon',
+                        'coordinates': [coordinates]
+                    }
+                });
+            }
+        }
+
+        function addfootprint(source, destination) {
+            syncDisabled = true;
+            console.log(`Projecting ${source} onto ${destination}`);
+            const bounds = source.getBounds();
+            const coordinates = [
+                [bounds.getSouthWest().lng, bounds.getSouthWest().lat],
+                [bounds.getNorthWest().lng, bounds.getNorthWest().lat],
+                [bounds.getNorthEast().lng, bounds.getNorthEast().lat],
+                [bounds.getSouthEast().lng, bounds.getSouthEast().lat],
+                [bounds.getSouthWest().lng, bounds.getSouthWest().lat]
+            ];
+            destination.addSource('viewport-polygon', {
+                'type': 'geojson',
+                'data': {
+                    'type': 'Feature',
+                    'geometry': {
+                        'type': 'Polygon',
+                        'coordinates': [coordinates]
+                    }
+                }
+            });
+            destination.addLayer({
+                'id': 'viewport-polygon',
+                'type': 'fill',
+                'source': 'viewport-polygon',
+                'layout': {},
+                'paint': {
+                    'fill-color': '#F08080',
+                    'fill-opacity': 0.5
+                }
+            });
+            source.on('render', () => {
+                updatePolygon(source, destination);
+            });
+        }
+
+        function moveToMapPosition(master, clones) {
+            var center = master.getCenter();
+            var zoom = master.getZoom();
+            var bearing = master.getBearing();
+            var pitch = master.getPitch();
+
+            clones.forEach(function (clone) {
+                clone.jumpTo({
+                    center: center,
+                    zoom: zoom,
+                    bearing: bearing,
+                    pitch: pitch
+                });
+            });
+        }
+
+        // Sync movements of two maps.
+        //
+        // All interactions that result in movement end up firing
+        // a "move" event. The trick here, though, is to
+        // ensure that movements don't cycle from one map
+        // to the other and back again, because such a cycle
+        // - could cause an infinite loop
+        // - prematurely halts prolonged movements like
+        //   double-click zooming, box-zooming, and flying
+        function syncMaps() {
+            var maps;
+            var argLen = arguments.length;
+            if (argLen === 1) {
+                maps = arguments[0];
+            } else {
+                maps = [];
+                for (var i = 0; i < argLen; i++) {
+                    maps.push(arguments[i]);
+                }
+            }
+
+            // Create all the movement functions, because if they're created every time
+            // they wouldn't be the same and couldn't be removed.
+            var fns = [];
+            maps.forEach(function (map, index) {
+                fns[index] = sync.bind(null, map, maps.filter(function (o, i) { return i !== index; }));
+            });
+
+            function on() {
+                maps.forEach(function (map, index) {
+                    map.on('move', fns[index]);
+                });
+            }
+
+            function off() {
+                maps.forEach(function (map, index) {
+                    map.off('move', fns[index]);
+                });
+            }
+
+            // When one map moves, we turn off the movement listeners
+            // on all the maps, move it, then turn the listeners on again
+            function sync(master, clones) {
+                if (!syncDisabled) {
+                    off();
+                    moveToMapPosition(master, clones);
+                    on();
+                }
+            }
+
+            on();
+            return function () { off(); fns = []; maps = []; };
+        }
+
+        class FootprintControl {
             constructor(otherMap) {
                 this.otherMap = otherMap;
             }
@@ -60,65 +209,22 @@
                 button.style.padding = "8px";
                 button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path d="M144 144l0 48 160 0 0-48c0-44.2-35.8-80-80-80s-80 35.8-80 80zM80 192l0-48C80 64.5 144.5 0 224 0s144 64.5 144 144l0 48 16 0c35.3 0 64 28.7 64 64l0 192c0 35.3-28.7 64-64 64L64 512c-35.3 0-64-28.7-64-64L0 256c0-35.3 28.7-64 64-64l16 0z"/></svg>`;
                 button.addEventListener('click', () => {
-                    const mapContainer = this._map.getContainer();
-                    if (lockedMap === 'none') {
-                        this.lock(button, mapContainer.id);
-                    } else if (lockedMap === mapContainer.id) {
-                        this.unlock(button);
+                    console.log(`Footprint button clicked on ${this._map.getContainer().id}`);
+                    removeFootprints();
+                    deselectAllButtons();
+                    if (sourceProjection === this._map.getContainer().id) {
+                        sourceProjection = 'none';
+                        syncDisabled = false;
+                        moveToMapPosition(this._map, [this.otherMap]);
                     } else {
-                        const previousButton = document.querySelector(`#${lockedMap} button`);
-                        if (previousButton) {
-                            this.unlock(previousButton);
-                        }
-                        this.lock(button, mapContainer.id);
+                        sourceProjection = this._map.getContainer().id;
+                        button.style.backgroundColor = 'hotpink';
+                        addfootprint(this._map, this.otherMap);
                     }
                 });
+
                 this._container.appendChild(button);
                 return this._container;
-            }
-
-            lock(button, mapId) {
-                lockedMap = mapId;
-                const bounds = this._map.getBounds();
-                const coordinates = [
-                    [bounds.getSouthWest().lng, bounds.getSouthWest().lat],
-                    [bounds.getNorthWest().lng, bounds.getNorthWest().lat],
-                    [bounds.getNorthEast().lng, bounds.getNorthEast().lat],
-                    [bounds.getSouthEast().lng, bounds.getSouthEast().lat],
-                    [bounds.getSouthWest().lng, bounds.getSouthWest().lat]
-                ];
-                this.otherMap.addSource('viewport-polygon', {
-                    'type': 'geojson',
-                    'data': {
-                        'type': 'Feature',
-                        'geometry': {
-                            'type': 'Polygon',
-                            'coordinates': [coordinates]
-                        }
-                    }
-                });
-                this.otherMap.addLayer({
-                    'id': 'viewport-polygon',
-                    'type': 'fill',
-                    'source': 'viewport-polygon',
-                    'layout': {},
-                    'paint': {
-                        'fill-color': '#F08080',
-                        'fill-opacity': 0.5
-                    }
-                });
-                button.style.backgroundColor = "lightgreen";
-            }
-
-            unlock(button) {
-                lockedMap = 'none';
-                if (this.otherMap.getLayer('viewport-polygon')) {
-                    this.otherMap.removeLayer('viewport-polygon');
-                }
-                if (this.otherMap.getSource('viewport-polygon')) {
-                    this.otherMap.removeSource('viewport-polygon');
-                }
-                button.style.backgroundColor = "";
             }
 
             onRemove() {
@@ -153,11 +259,11 @@
                                 "line-color": "white",
                                 "line-opacity": 0.3
                             },
-                          },
+                        },
                     ]
-                    }
+                }
 
-        
+
                 const globeStyle = { ...gridStyle, projection: { type: 'globe' } };
 
                 const tileBase64 = 'GvwKeAIKBWxpbmVzKIAgGgV3aWR0aCIGCgR3aWRlIggKBm5hcnJvdxIRGAISAgAAIgkJgECAQAoA5T8SDxgCEgIAACIHCQAACoBAABIQGAISAgAAIggJAIBACgDlPxIQGAISAgABIggJAOQBCoBAABIRGAISAgABIgkJ5AGAQAoA5T8SEBgCEgIAASIICQDIAwqAQAASERgCEgIAASIJCcgDgEAKAOU/EhAYAhICAAEiCAkAqgUKgEAAEhAYAhICAAEiCAkAjgcKgEAAEhEYAhICAAEiCQmqBYBACgDlPxIRGAISAgABIgkJjgeAQAoA5T8SEBgCEgIAASIICQDyCAqAQAASEBgCEgIAASIICQDWCgqAQAASEBgCEgIAASIICQC4DAqAQAASEBgCEgIAASIICQCcDgqAQAASERgCEgIAASIJCfIIgEAKAOU/EhEYAhICAAEiCQnWCoBACgDlPxIRGAISAgABIgkJuAyAQAoA5T8SERgCEgIAASIJCZwOgEAKAOU/EhAYAhICAAAiCAkAgBAKgEAAEhAYAhICAAEiCAkA5BEKgEAAEhAYAhICAAEiCAkAyBMKgEAAEhAYAhICAAEiCAkAqhUKgEAAEhAYAhICAAEiCAkAjhcKgEAAEhAYAhICAAEiCAkA8hgKgEAAEhAYAhICAAEiCAkA1hoKgEAAEhAYAhICAAEiCAkAuBwKgEAAEhAYAhICAAEiCAkAnB4KgEAAEhEYAhICAAAiCQmAEIBACgDlPxIRGAISAgABIgkJ5BGAQAoA5T8SERgCEgIAASIJCcgTgEAKAOU/EhEYAhICAAEiCQmqFYBACgDlPxIRGAISAgABIgkJjheAQAoA5T8SERgCEgIAASIJCfIYgEAKAOU/EhEYAhICAAEiCQnWGoBACgDlPxIRGAISAgABIgkJuByAQAoA5T8SERgCEgIAASIJCZwegEAKAOU/EhAYAhICAAAiCAkAgCAKgEAAEhAYAhICAAEiCAkA5CEKgEAAEhAYAhICAAEiCAkAyCMKgEAAEhAYAhICAAEiCAkAqiUKgEAAEhAYAhICAAEiCAkAjicKgEAAEhAYAhICAAEiCAkA8igKgEAAEhAYAhICAAEiCAkA1ioKgEAAEhAYAhICAAEiCAkAuCwKgEAAEhAYAhICAAEiCAkAnC4KgEAAEhAYAhICAAAiCAkAgDAKgEAAEhAYAhICAAEiCAkA5DEKgEAAEhAYAhICAAEiCAkAyDMKgEAAEhAYAhICAAEiCAkAqjUKgEAAEhAYAhICAAEiCAkAjjcKgEAAEhAYAhICAAEiCAkA8jgKgEAAEhAYAhICAAEiCAkA1joKgEAAEhAYAhICAAEiCAkAuDwKgEAAEhAYAhICAAEiCAkAnD4KgEAAEhEYAhICAAAiCQmAIIBACgDlPxIRGAISAgABIgkJ5CGAQAoA5T8SERgCEgIAASIJCcgjgEAKAOU/EhEYAhICAAEiCQmqJYBACgDlPxIRGAISAgABIgkJjieAQAoA5T8SERgCEgIAASIJCfIogEAKAOU/EhEYAhICAAEiCQnWKoBACgDlPxIRGAISAgABIgkJuCyAQAoA5T8SERgCEgIAASIJCZwugEAKAOU/EhEYAhICAAAiCQmAMIBACgDlPxIRGAISAgABIgkJ5DGAQAoA5T8SERgCEgIAASIJCcgzgEAKAOU/EhEYAhICAAEiCQmqNYBACgDlPxIRGAISAgABIgkJjjeAQAoA5T8SERgCEgIAASIJCfI4gEAKAOU/EhEYAhICAAEiCQnWOoBACgDlPxIRGAISAgABIgkJuDyAQAoA5T8SERgCEgIAASIJCZw+gEAKAOU/EhAYAhICAAAiCAkAgEAKgEAA';
@@ -167,22 +273,23 @@
                     return { data: tileArrayBuffer };
                 });
 
-                const map1 = new maplibregl.Map({
+                map1 = new maplibregl.Map({
                     container: 'map1',
                     style: globeStyle,
                     center: [0, 0],
                     zoom: 1,
                 });
-                const map2 = new maplibregl.Map({
+                map2 = new maplibregl.Map({
                     container: 'map2',
                     style: gridStyle,
                     center: [0, 0],
                     zoom: 1,
+                    renderWorldCopies: false,
                 });
 
                 // Add the custom control to each map
-                map1.addControl(new LockControl(map2), 'top-right');
-                map2.addControl(new LockControl(map1), 'top-right');
+                map1.addControl(new FootprintControl(map2), 'top-right');
+                map2.addControl(new FootprintControl(map1), 'top-right');
 
                 syncMaps(map1, map2);
 
