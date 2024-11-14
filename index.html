@@ -298,10 +298,10 @@
                     renderWorldCopies: false,
                 });
 
-                // Add the custom control to each map
+                map1.addControl(new maplibregl.NavigationControl(), 'top-right');
+                map2.addControl(new maplibregl.NavigationControl(), 'top-right');
                 map1.addControl(new FootprintControl(map2), 'top-right');
                 map2.addControl(new FootprintControl(map1), 'top-right');
-
                 syncMaps(map1, map2);
 
             })
